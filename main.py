@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 import numpy as np
 import pandas as pd
-import datetime
+from datetime import date
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data import TimeFrame
@@ -14,11 +14,25 @@ from tensorflow.keras.optimizers import Adam
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+
+# MACD Strategy:
+#
+# When MACD line crosses ABOVE the signal line (while BELOW the zero line), buy.
+# When MACD line crosses BELOW the signal line (while ABOVE the zero line), sell/short.
+#
+# Use this alongside the 200 EMA.
+# If price is above the 200 EMA, then we are in an uptrend.
+# If price is below the 200 EMA, then we are in a downtrend.
+# We only want to buy during an uptrend and sell during a downtrend.
+#
+# Pair all of this with price action and other indicators, which will be later tested.
+
+
 load_dotenv()
 
 
+# plots price, volume, and MACD as three separate charts
 def plot_stock_data(df, symbol="NVDA"):
-    # 1) Create 3-row subplot (heights: candles, volume, MACD)
     fig = make_subplots(
         rows=3,
         cols=1,
@@ -233,64 +247,6 @@ def adjust_for_stock_splits(df, splits):
     return df
 
 
-def get_stock_data(symbol, start_date, end_date):
-    """
-    Fetch daily OHLCV for 'symbol' between start_date and end_date (YYYY-MM-DD)
-    Returns:
-      - DataFrame with columns: ['open', 'high', 'low', 'close', 'volume']
-      - UTC DatetimeIndex
-    """
-    # instantiate the client
-    client = StockHistoricalDataClient(
-        api_key=os.getenv("APCA_API_KEY_ID"),
-        secret_key=os.getenv("APCA_API_SECRET_KEY"),
-    )
-
-    # creating request object
-    request_params = StockBarsRequest(
-        symbol_or_symbols=symbol,
-        start=pd.to_datetime(start_date, utc=True),
-        end=pd.to_datetime(end_date, utc=True),
-        timeframe=TimeFrame.Day,
-    )
-
-    # client.get_stock_bars() => fetches data
-    # .df => converts the data into a pandas DataFrame, where 'timestamp' is the DataFrame's index by default
-    bars = client.get_stock_bars(request_params).df
-
-    # reset_index() => replaces the DataFrame's current index (timestamp) with a default integer index,
-    # and adds the previous index as a column to our DataFrame
-    bars = bars.reset_index()
-
-    # now we can convert the timestamp column to a datetime (UTC)
-    bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
-
-    # Set timestamp as index
-    bars = bars.set_index("timestamp")
-
-    # Rename to simpler names
-    bars = bars.rename(
-        columns={
-            "open": "open",
-            "high": "high",
-            "low": "low",
-            "close": "close",
-            "volume": "volume",
-        }
-    )
-
-    # Ensure proper index
-    bars.index.name = "timestamp"
-
-    # Debug: Check raw data
-    print(f"Raw data shape: {bars.shape}")
-    print(
-        f"Raw volume stats: min={bars['volume'].min():,}, max={bars['volume'].max():,}"
-    )
-
-    return bars
-
-
 def create_model(input_shape):
     from tensorflow.keras.regularizers import l2
 
@@ -326,12 +282,51 @@ def create_model(input_shape):
     return model
 
 
-if __name__ == "__main__":
-    raw_df = get_stock_data("NVDA", "2020-01-01", "2025-07-18")
-    df = prepare_data(raw_df)
-    print(df.head())
-    print("\nDataFrame info:")
-    print(df.info())
+# Fetch open, high, low, close, and volume data for 'ticker' between 'start_date' and 'end_date'.
+# Returns a dataframe with those as series/columns.
+def get_stock_data(ticker, start_date, end_date):
+    client = StockHistoricalDataClient(
+        api_key=os.getenv("APCA_API_KEY_ID"),
+        secret_key=os.getenv("APCA_API_SECRET_KEY"),
+    )
 
-    fig = plot_stock_data(df, "NVDA")
-    fig.show(config={"scrollZoom": True})
+    # creating request object
+    request = StockBarsRequest(
+        symbol_or_symbols=ticker,
+        start=start_date,
+        end=end_date,
+        timeframe=TimeFrame.Day,
+    )
+
+    # due to the structure of the BarSet object returned by get_stock_bars(), performing .df will return a MULTI-INDEX dataframe
+    # thus we must convert the current indices into columns with reset_index()
+    df = client.get_stock_bars(request).df
+    df = df.reset_index()
+    print(f"\nDataframe for {ticker}: ")
+    print("\n", df.head(), "\n")
+
+    return df
+
+
+if __name__ == "__main__":
+    ticker = input("Enter ticker: ")
+
+    # grab dates, (probably optional) fallback for leap years
+    end_date = date.today()
+    try:
+        start_date = end_date.replace(year=end_date.year - 5)
+    except:
+        start_date = end_date.replace(month=2, day=28, year=end_date.year - 5)
+
+    #
+    raw_df = get_stock_data(ticker, start_date, end_date)
+
+    # df = prepare_data(raw_df)
+    # print("")
+    # print(df.head())
+    # print("")
+    # print("\nDataFrame info:")
+    # print(df.info())
+
+    # fig = plot_stock_data(df, ticker)
+    # fig.show(config={"scrollZoom": True})
