@@ -25,13 +25,13 @@ from plotly.subplots import make_subplots
 # If price is below the 200 EMA, then we are in a downtrend.
 # We only want to buy during an uptrend and sell during a downtrend.
 #
-# Pair all of this with price action and other indicators, which will be later tested.
+# Combine all of this with price action and other indicators (will later be determined and tested).
 
 
 load_dotenv()
 
 
-# plots price, volume, and MACD as three separate charts
+# Plots price, volume, and MACD as three separate charts
 def plot_stock_data(df, symbol="NVDA"):
     fig = make_subplots(
         rows=3,
@@ -43,11 +43,10 @@ def plot_stock_data(df, symbol="NVDA"):
             [{"type": "xy"}],
             [{"type": "xy"}],
             [{"type": "xy"}],
-        ],  # Changed volume spec from "bar" to "xy"
+        ],
         subplot_titles=("Candlesticks with SMAs", "Volume", "MACD"),
     )
 
-    # 2) Candlestick + SMAs on row 1
     fig.add_trace(
         go.Candlestick(
             x=df.index,
@@ -71,7 +70,6 @@ def plot_stock_data(df, symbol="NVDA"):
             col=1,
         )
 
-    # 3) Volume bars with red/green colors based on price movement
     volume_colors = [
         "green" if close > open else "red"
         for close, open in zip(df["close"], df["open"])
@@ -86,7 +84,7 @@ def plot_stock_data(df, symbol="NVDA"):
 
         print(
             f"Volume data range: {volume_data.min():.1f} to {volume_data.max():.1f} {volume_suffix}"
-        )  # Debug print
+        )
 
         fig.add_trace(
             go.Bar(
@@ -95,7 +93,7 @@ def plot_stock_data(df, symbol="NVDA"):
                 name="Volume",
                 marker_color=volume_colors,
                 showlegend=False,
-                opacity=0.7,  # Add some transparency
+                opacity=0.7,
             ),
             row=2,
             col=1,
@@ -107,7 +105,6 @@ def plot_stock_data(df, symbol="NVDA"):
     else:
         print("Warning: No volume data available or all volume values are NaN")
 
-    # 4) MACD lines on row 3
     if "MACD" in df.columns and not df["MACD"].isna().all():
         fig.add_trace(
             go.Scatter(x=df.index, y=df["MACD"], name="MACD", line=dict(width=1)),
@@ -127,11 +124,9 @@ def plot_stock_data(df, symbol="NVDA"):
             col=1,
         )
 
-    # Y‑axis labels and formatting
     fig.update_yaxes(title_text="Price (USD)", row=1, col=1)
     fig.update_yaxes(title_text="MACD", row=3, col=1)
 
-    # 5) Layout tweaks
     fig.update(layout_xaxis_rangeslider_visible=False)
     fig.update_layout(
         title=f"{symbol} CHART",
@@ -154,22 +149,18 @@ def prepare_data(df, look_back=10):
     ]
     df = adjust_for_stock_splits(df, splits)
 
-    # Debug: Check volume data after split adjustment
     print(f"Volume data after split adjustment:")
     print(f"Min volume: {df['volume'].min():,}")
     print(f"Max volume: {df['volume'].max():,}")
     print(f"Volume data type: {df['volume'].dtype}")
     print(f"Any NaN values in volume: {df['volume'].isna().any()}")
 
-    # 2) Simple Moving Averages
     df["SMA5"] = df["close"].rolling(window=5).mean()
     df["SMA20"] = df["close"].rolling(window=20).mean()
     df["SMA50"] = df["close"].rolling(window=50).mean()
 
-    # 3) Price Change (today vs yesterday)
     df["Price_Change"] = df["close"].diff()
 
-    # 4) RSI (14-day default)
     delta = df["close"].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -178,13 +169,11 @@ def prepare_data(df, look_back=10):
     rs = avg_gain / avg_loss
     df["RSI"] = 100 - (100 / (1 + rs))
 
-    # 5) MACD and Signal lines (12-EMA minus 26-EMA, with 9-EMA signal)
     ema12 = df["close"].ewm(span=12, adjust=False).mean()
     ema26 = df["close"].ewm(span=26, adjust=False).mean()
     df["MACD"] = ema12 - ema26
     df["MACD_Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 
-    # 6) Drop any rows with NaNs (i.e. until all indicators are "warm")
     df_clean = df.dropna().copy()
 
     return df_clean
@@ -282,8 +271,8 @@ def create_model(input_shape):
     return model
 
 
-# Fetch open, high, low, close, and volume data for 'ticker' between 'start_date' and 'end_date'.
-# Returns a dataframe with those as series/columns.
+# Fetch open, high, low, close, and volume data for 'ticker' between 'start_date' and 'end_date'
+# Returns a dataframe with those as series/columns
 def get_stock_data(ticker, start_date, end_date):
     client = StockHistoricalDataClient(
         api_key=os.getenv("APCA_API_KEY_ID"),
@@ -318,8 +307,7 @@ if __name__ == "__main__":
     except:
         start_date = end_date.replace(month=2, day=28, year=end_date.year - 5)
 
-    #
-    raw_df = get_stock_data(ticker, start_date, end_date)
+    df = get_stock_data(ticker, start_date, end_date)
 
     # df = prepare_data(raw_df)
     # print("")
