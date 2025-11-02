@@ -25,6 +25,8 @@ from plotly.subplots import make_subplots
 # If price is below the 200 EMA, then we are in a downtrend.
 # We only want to buy during an uptrend and sell during a downtrend.
 #
+# Also use the 9, 21, 50, and 100 EMAs.
+#
 # Combine all of this with price action and other indicators (will later be determined and tested).
 
 
@@ -141,101 +143,6 @@ def plot_stock_data(df, symbol="NVDA"):
     return fig
 
 
-def prepare_data(df, look_back=10):
-    # FIXED: Use correct split ratios for NVDA
-    splits = [
-        ("2021-07-20", 4),  # NVDA 4-for-1 split on July 20, 2021
-        ("2024-06-10", 10, True),  # NVDA 10-for-1 split on June 10, 2024 (intraday)
-    ]
-    df = adjust_for_stock_splits(df, splits)
-
-    print(f"Volume data after split adjustment:")
-    print(f"Min volume: {df['volume'].min():,}")
-    print(f"Max volume: {df['volume'].max():,}")
-    print(f"Volume data type: {df['volume'].dtype}")
-    print(f"Any NaN values in volume: {df['volume'].isna().any()}")
-
-    df["SMA5"] = df["close"].rolling(window=5).mean()
-    df["SMA20"] = df["close"].rolling(window=20).mean()
-    df["SMA50"] = df["close"].rolling(window=50).mean()
-
-    df["Price_Change"] = df["close"].diff()
-
-    delta = df["close"].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(14).mean()
-    avg_loss = loss.rolling(14).mean()
-    rs = avg_gain / avg_loss
-    df["RSI"] = 100 - (100 / (1 + rs))
-
-    ema12 = df["close"].ewm(span=12, adjust=False).mean()
-    ema26 = df["close"].ewm(span=26, adjust=False).mean()
-    df["MACD"] = ema12 - ema26
-    df["MACD_Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
-
-    df_clean = df.dropna().copy()
-
-    return df_clean
-
-
-def adjust_for_stock_splits(df, splits):
-    """
-    Adjust historical data for stock splits
-    Args:
-        df: DataFrame with OHLCV data
-        splits: List of tuples (date, ratio) or (date, ratio, is_intraday)
-                where ratio is the split ratio (e.g., 4 for a 4:1 split)
-    """
-    df = df.copy()
-
-    # Debug: Check original volume data
-    print(f"Original volume data:")
-    print(f"Min volume: {df['volume'].min():,}")
-    print(f"Max volume: {df['volume'].max():,}")
-
-    idx = df.index.tz_convert("UTC").normalize()
-
-    # Sort splits by date ascending (earliest first) to apply adjustments correctly
-    splits_sorted = sorted(splits, key=lambda s: s[0])
-
-    # Keep track of cumulative factor
-    cumulative_factor = 1.0
-
-    for split_info in splits_sorted:
-        date_str, ratio = split_info[0], split_info[1]
-        is_intraday = len(split_info) == 3 and split_info[2]
-        split_dt = pd.to_datetime(date_str).tz_localize("UTC").normalize()
-
-        print(f"Processing split: {date_str}, ratio: {ratio}, intraday: {is_intraday}")
-
-        # Update cumulative factor
-        cumulative_factor *= ratio
-
-        # Apply adjustment to all data before this split
-        pre_split_mask = idx < split_dt
-
-        if is_intraday:
-            # For intraday splits, handle the split day specially
-            day_mask = idx == split_dt
-            if day_mask.any():
-                # Get the post-split close price and work backwards
-                post_close = df.loc[day_mask, "close"].iloc[0]
-                # Create reasonable OHLC for the split day
-                df.loc[day_mask, "open"] = post_close * 0.99
-                df.loc[day_mask, "high"] = post_close * 1.02
-                df.loc[day_mask, "low"] = post_close * 0.97
-
-        # Adjust all pre-split data
-        if pre_split_mask.any():
-            print(f"Adjusting {pre_split_mask.sum()} rows for split ratio {ratio}")
-            for col in ["open", "high", "low", "close"]:
-                df.loc[pre_split_mask, col] /= ratio
-            df.loc[pre_split_mask, "volume"] *= ratio
-
-    return df
-
-
 def create_model(input_shape):
     from tensorflow.keras.regularizers import l2
 
@@ -291,14 +198,48 @@ def get_stock_data(ticker, start_date, end_date):
     # thus we must convert the current indices into columns with reset_index()
     df = client.get_stock_bars(request).df
     df = df.reset_index()
+
+    # calculate SMAs
+    df["sma5"] = df["close"].rolling(window=5).mean()
+    df["sma20"] = df["close"].rolling(window=20).mean()
+    df["sma50"] = df["close"].rolling(window=50).mean()
+
+    # calculate price change based on close
+    df["price_change"] = df["close"].diff()
+
+    # series of price differences
+    delta = df["close"].diff()
+    # series of positive price differences (any difference < 0 is simply set to 0, not removed)
+    gain = delta.clip(lower=0)
+    # series of negative price difference MAGNITUDES (any difference > 0 is simply set to 0, not removed)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
+    rs = avg_gain / avg_loss
+
+    # calculate RSI column
+    df["rsi"] = 100 - (100 / (1 + rs))
+
+    # ensure df is chronologically sorted before ewm()
+    df = df.sort_values("timestamp")
+
+    # calculate EMAs recursively (adjust=False)
+    ema12 = df["close"].ewm(span=12, adjust=False).mean()
+    ema26 = df["close"].ewm(span=26, adjust=False).mean()
+
+    df["macd"] = ema12 - ema26
+    # signal line is the 9-day EMA of the MACD itself
+    df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
+
     print(f"\nDataframe for {ticker}: ")
-    print("\n", df.head(), "\n")
+    print("\n", df.head(10), "\n")
 
     return df
 
 
 if __name__ == "__main__":
-    ticker = input("Enter ticker: ")
+    ticker = input("\nEnter ticker: ")
 
     # grab dates, (probably optional) fallback for leap years
     end_date = date.today()
@@ -308,13 +249,6 @@ if __name__ == "__main__":
         start_date = end_date.replace(month=2, day=28, year=end_date.year - 5)
 
     df = get_stock_data(ticker, start_date, end_date)
-
-    # df = prepare_data(raw_df)
-    # print("")
-    # print(df.head())
-    # print("")
-    # print("\nDataFrame info:")
-    # print(df.info())
 
     # fig = plot_stock_data(df, ticker)
     # fig.show(config={"scrollZoom": True})
