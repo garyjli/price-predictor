@@ -1,18 +1,20 @@
 import os
-from dotenv import load_dotenv
+from datetime import date
+
 import numpy as np
 import pandas as pd
-from datetime import date
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data import TimeFrame
+from dotenv import load_dotenv
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.optimizers import Adam
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+from tensorflow.keras.regularizers import l2
+from tensorflow.keras.layers import Input
+
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data import TimeFrame
 
 
 # MACD Strategy:
@@ -31,151 +33,6 @@ from plotly.subplots import make_subplots
 
 
 load_dotenv()
-
-
-# Plots price, volume, and MACD as three separate charts
-def plot_stock_data(df, symbol="NVDA"):
-    fig = make_subplots(
-        rows=3,
-        cols=1,
-        shared_xaxes=True,
-        row_heights=[0.6, 0.2, 0.2],
-        vertical_spacing=0.1,
-        specs=[
-            [{"type": "xy"}],
-            [{"type": "xy"}],
-            [{"type": "xy"}],
-        ],
-        subplot_titles=("Candlesticks with SMAs", "Volume", "MACD"),
-    )
-
-    fig.add_trace(
-        go.Candlestick(
-            x=df.index,
-            open=df["open"],
-            high=df["high"],
-            low=df["low"],
-            close=df["close"],
-            name="Price",
-            line=dict(width=2),
-        ),
-        row=1,
-        col=1,
-    )
-
-    for sma, color in [("SMA5", "blue"), ("SMA20", "orange"), ("SMA50", "green")]:
-        fig.add_trace(
-            go.Scatter(
-                x=df.index, y=df[sma], name=sma, line=dict(color=color, width=1)
-            ),
-            row=1,
-            col=1,
-        )
-
-    volume_colors = [
-        "green" if close > open else "red"
-        for close, open in zip(df["close"], df["open"])
-    ]
-
-    # Check if volume data exists and has valid values
-    if "volume" in df.columns and not df["volume"].isna().all():
-        # Always display volume in millions
-        volume_data = df["volume"] / 1_000_000
-        volume_suffix = "M"
-        print(f"Max volume: {df['volume'].max():,}")  # Debug print
-
-        print(
-            f"Volume data range: {volume_data.min():.1f} to {volume_data.max():.1f} {volume_suffix}"
-        )
-
-        fig.add_trace(
-            go.Bar(
-                x=df.index,
-                y=volume_data,
-                name="Volume",
-                marker_color=volume_colors,
-                showlegend=False,
-                opacity=0.7,
-            ),
-            row=2,
-            col=1,
-        )
-
-        # Set y-axis title for volume
-        fig.update_yaxes(title_text=f"Volume ({volume_suffix})", row=2, col=1)
-        fig.update_yaxes(tickformat=".1f", ticksuffix=volume_suffix, row=2, col=1)
-    else:
-        print("Warning: No volume data available or all volume values are NaN")
-
-    if "MACD" in df.columns and not df["MACD"].isna().all():
-        fig.add_trace(
-            go.Scatter(x=df.index, y=df["MACD"], name="MACD", line=dict(width=1)),
-            row=3,
-            col=1,
-        )
-
-    if "MACD_Signal" in df.columns and not df["MACD_Signal"].isna().all():
-        fig.add_trace(
-            go.Scatter(
-                x=df.index,
-                y=df["MACD_Signal"],
-                name="Signal",
-                line=dict(width=1, dash="dash"),
-            ),
-            row=3,
-            col=1,
-        )
-
-    fig.update_yaxes(title_text="Price (USD)", row=1, col=1)
-    fig.update_yaxes(title_text="MACD", row=3, col=1)
-
-    fig.update(layout_xaxis_rangeslider_visible=False)
-    fig.update_layout(
-        title=f"{symbol} CHART",
-        height=800,
-        margin=dict(l=40, r=20, t=60, b=40),
-        template="plotly_white",
-        dragmode="pan",
-        xaxis=dict(rangeslider=dict(visible=False), type="date"),
-        bargap=0.05,  # Reduce gap to make candlesticks wider
-    )
-
-    return fig
-
-
-def create_model(input_shape):
-    from tensorflow.keras.regularizers import l2
-
-    model = Sequential(
-        [
-            LSTM(
-                32,
-                input_shape=input_shape,
-                return_sequences=True,
-                recurrent_dropout=0.2,
-                dropout=0.2,
-                kernel_regularizer=l2(0.001),
-            ),
-            LSTM(
-                16,
-                return_sequences=False,
-                recurrent_dropout=0.2,
-                dropout=0.2,
-                kernel_regularizer=l2(0.001),
-            ),
-            Dense(8, activation="relu", kernel_regularizer=l2(0.001)),
-            Dropout(0.3),
-            Dense(1, activation="sigmoid"),
-        ]
-    )
-
-    model.compile(
-        optimizer=Adam(learning_rate=0.001),
-        loss="binary_crossentropy",
-        metrics=["accuracy"],
-    )
-
-    return model
 
 
 # Fetch open, high, low, close, and volume data for 'ticker' between 'start_date' and 'end_date'
@@ -233,14 +90,54 @@ def get_stock_data(ticker, start_date, end_date):
     df["ema100"] = df["close"].ewm(span=100, adjust=False).mean()
 
     print(f"\nDataframe for {ticker}: ")
-    print("\n", df.head(10), "\n")
+    print("\n", df.head(10))
 
     return df
 
 
+# def adjust_for_stock_splits(df, split_date, split_ratio):
+#     if isinstance(split_date, str):
+#         split_date = pd.to_datetime(split_date).tz_localize("UTC")
+
+#     pre_split_mask = df["timestamp"] < split_date
+
+#     if pre_split_mask.any():
+#         price_columns = ["open", "high", "low", "close"]
+
+#         for col in price_columns:
+#             if col in df.columns:
+#                 df.loc[pre_split_mask, col] = df.loc[pre_split_mask, col] / split_ratio
+
+#         if "volume" in df.columns:
+#             df.loc[pre_split_mask, "volume"] = (
+#                 df.loc[pre_split_mask, "volume"] * split_ratio
+#             )
+
+#     return df
+
+
 def preprocess_data(df):
     # axis = 1 to specify we want to drop columns
-    df = df.drop(["symbol", "timestamp"], axis=1)
+    df = df.drop(
+        [
+            "symbol",
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "vwap",
+            "trade_count",
+            "ema9",
+            "ema21",
+            "ema100",
+            "sma5",
+            "sma20",
+            "sma50",
+            "rsi",
+            "price_change",
+        ],
+        axis=1,
+    )
     # drop any rows with NaN, reset indices, and don't keep old indices as column
     df = df.dropna().reset_index(drop=True)
 
@@ -251,11 +148,12 @@ def preprocess_data(df):
     X = df.drop("direction", axis=1)
     Y = df["direction"]
 
+    # scaler = MinMaxScaler(feature_range=(0, 1))
     scaler = StandardScaler()
     # X_scaled is still a df
     X_scaled = scaler.fit_transform(X)
 
-    window = 30
+    window = 60
     X_seq, Y_seq = [], []
 
     for i in range(len(X_scaled) - window):
@@ -272,16 +170,54 @@ def preprocess_data(df):
     # Y_seq now has shape (samples,)
     Y_seq = np.array(Y_seq)
 
-    split = int(len(X_seq) * 0.8)
-    X_train = X_seq[:split]
-    Y_train = Y_seq[:split]
-    X_test = X_seq[split:]
-    Y_test = Y_seq[split:]
+    # # Use 80/20 train/test split
+    # split = int(len(X_seq) * 0.8)
+    # X_train = X_seq[:split]
+    # Y_train = Y_seq[:split]
+    # X_test = X_seq[split:]
+    # Y_test = Y_seq[split:]
+
+    X_train, X_test, Y_train, Y_test = train_test_split(
+        X_seq, Y_seq, test_size=0.3, shuffle=False
+    )
 
     print(f"\nPreprocessing for {ticker}: ")
     print("\n", df.head(10), "\n")
 
     return X_train, Y_train, X_test, Y_test
+
+
+def create_model(input_shape):
+    model = Sequential(
+        [
+            Input(shape=input_shape),
+            LSTM(
+                32,
+                return_sequences=True,
+                recurrent_dropout=0.2,
+                dropout=0.2,
+                kernel_regularizer=l2(0.001),
+            ),
+            LSTM(
+                16,
+                return_sequences=False,
+                recurrent_dropout=0.2,
+                dropout=0.2,
+                kernel_regularizer=l2(0.001),
+            ),
+            Dense(8, activation="relu", kernel_regularizer=l2(0.001)),
+            Dropout(0.3),
+            Dense(1, activation="sigmoid"),
+        ]
+    )
+
+    model.compile(
+        optimizer=Adam(learning_rate=0.001),
+        loss="binary_crossentropy",
+        metrics=["accuracy"],
+    )
+
+    return model
 
 
 if __name__ == "__main__":
@@ -294,9 +230,27 @@ if __name__ == "__main__":
     except:
         start_date = end_date.replace(month=2, day=28, year=end_date.year - 5)
 
+    # fetch data
     df = get_stock_data(ticker, start_date, end_date)
 
+    # df = adjust_for_stock_splits(df, split_date="2021-07-20", split_ratio=4)
+    # df = adjust_for_stock_splits(df, split_date="2024-06-10", split_ratio=10)
+
+    # preprocess data
     X_train, Y_train, X_test, Y_test = preprocess_data(df.copy())
 
-    # fig = plot_stock_data(df, ticker)
-    # fig.show(config={"scrollZoom": True})
+    # create model
+    model = create_model((X_train.shape[1], X_train.shape[2]))
+
+    history = model.fit(
+        X_train,
+        Y_train,
+        epochs=40,
+        batch_size=32,
+        validation_data=(X_test, Y_test),
+        shuffle=False,
+        verbose=1,
+    )
+
+    loss, accuracy = model.evaluate(X_test, Y_test)
+    print(f"Test Accuracy: {accuracy:.3f}")
