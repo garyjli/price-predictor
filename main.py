@@ -213,29 +213,75 @@ def get_stock_data(ticker, start_date, end_date):
     gain = delta.clip(lower=0)
     # series of negative price difference MAGNITUDES (any difference > 0 is simply set to 0, not removed)
     loss = -delta.clip(upper=0)
-
+    # 14 days for RSI formula
     avg_gain = gain.rolling(14).mean()
     avg_loss = loss.rolling(14).mean()
     rs = avg_gain / avg_loss
-
-    # calculate RSI column
     df["rsi"] = 100 - (100 / (1 + rs))
 
     # ensure df is chronologically sorted before ewm()
     df = df.sort_values("timestamp")
-
     # calculate EMAs recursively (adjust=False)
     ema12 = df["close"].ewm(span=12, adjust=False).mean()
     ema26 = df["close"].ewm(span=26, adjust=False).mean()
-
     df["macd"] = ema12 - ema26
     # signal line is the 9-day EMA of the MACD itself
     df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
+
+    df["ema9"] = df["close"].ewm(span=9, adjust=False).mean()
+    df["ema21"] = df["close"].ewm(span=21, adjust=False).mean()
+    df["ema100"] = df["close"].ewm(span=100, adjust=False).mean()
 
     print(f"\nDataframe for {ticker}: ")
     print("\n", df.head(10), "\n")
 
     return df
+
+
+def preprocess_data(df):
+    # axis = 1 to specify we want to drop columns
+    df = df.drop(["symbol", "timestamp"], axis=1)
+    # drop any rows with NaN, reset indices, and don't keep old indices as column
+    df = df.dropna().reset_index(drop=True)
+
+    # calls astype(int) on a series of booleans
+    # direction on day n tells whether price goes up (1) or down (0) from day n to day n+1
+    df["direction"] = (df["close"].shift(-1) > df["close"]).astype(int)
+
+    X = df.drop("direction", axis=1)
+    Y = df["direction"]
+
+    scaler = StandardScaler()
+    # X_scaled is still a df
+    X_scaled = scaler.fit_transform(X)
+
+    window = 30
+    X_seq, Y_seq = [], []
+
+    for i in range(len(X_scaled) - window):
+        # grabs rows i to i + window from df X_scaled
+        X_seq.append(X_scaled[i : i + window])
+        # grabs the direction value at index i + window
+        Y_seq.append(Y.values[i + window])
+
+    # Now X_seq is a list of python 2D arrays (rows x columns from the df)
+    # Now Y_seq is a list of scalars (0 and 1)
+
+    # X_seq now has shape (samples, timesteps, features)
+    X_seq = np.array(X_seq)
+    # Y_seq now has shape (samples,)
+    Y_seq = np.array(Y_seq)
+
+    split = int(len(X_seq) * 0.8)
+    X_train = X_seq[:split]
+    Y_train = Y_seq[:split]
+    X_test = X_seq[split:]
+    Y_test = Y_seq[split:]
+
+    print(f"\nPreprocessing for {ticker}: ")
+    print("\n", df.head(10), "\n")
+
+    return X_train, Y_train, X_test, Y_test
 
 
 if __name__ == "__main__":
@@ -249,6 +295,8 @@ if __name__ == "__main__":
         start_date = end_date.replace(month=2, day=28, year=end_date.year - 5)
 
     df = get_stock_data(ticker, start_date, end_date)
+
+    X_train, Y_train, X_test, Y_test = preprocess_data(df.copy())
 
     # fig = plot_stock_data(df, ticker)
     # fig.show(config={"scrollZoom": True})
